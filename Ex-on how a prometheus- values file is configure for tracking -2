@@ -1,0 +1,77 @@
+  alertmanager.yml:
+    global:
+      resolve_timeout: 1m
+      # slack_api_url: ''
+
+    receivers:
+      - name: 'gmail-notifications'
+        email_configs:
+        - to: samuelmunoh@gmail.com
+          from: samuelmunoh@gmail.com # Update your from mail id here
+          smarthost: smtp.gmail.com:587
+          auth_username: samuelmunoh@gmail.com # Update your from mail id here
+          auth_identity: samuelmunoh@gmail.com # Update your from mail id here
+          auth_password: tezeh97% # Update your password here
+          send_resolved: true
+          headers:
+            subject: " Prometheus -  Alert  "
+          text: "{{ range .Alerts }} Hi, \n{{ .Annotations.summary }}  \n {{ .Annotations.description }} {{end}} "
+        # slack_configs:
+        #  - channel: '@you'
+        #    send_resolved: true
+
+    route:
+      group_wait: 10s       # wait for ten-secons
+      group_interval: 2m
+      receiver: 'gmail-notifications'
+      repeat_interval: 2m  # do it every 2 minutes
+serverFiles:
+  alerting_rules.yml:
+      groups:
+      - name: NodeDown     # it will be checking if a node ie down
+        rules:
+        # Alert for any instance that is unreachable for >5 minutes.
+        - alert: InstanceDown  # if node is down send and alert
+          expr: up{job="kubernetes-nodes"} == 0
+          for: 2m               # if node is down for 2m send an alert.
+          labels:
+            severity: page
+          annotations:
+            host: "{{ $labels.kubernetes_io_hostname }}"
+            summary: "Instance down"
+            description: "Node {{ $labels.kubernetes_io_hostname  }}has been down for more than 5 minutes."
+      - name: low_memory_alert    # here we are setting role for memory alert
+        rules:
+        - alert: LowMemory
+          expr: (node_memory_MemAvailable_bytes /  node_memory_MemTotal_bytes) * 100 < 85 # if  oour memory is less-than 85% send alery
+          for: 2m                                                                         # every 2m
+          labels:
+            severity: warning                                                             # if sever send warning
+          annotations:
+            host: "{{ $labels.kubernetes_node  }}"
+            summary: "{{ $labels.kubernetes_node }} Host is low on memory.  Only {{ $value }}% left"
+            description: "{{ $labels.kubernetes_node }}  node is low on memory.  Only {{ $value }}% left"
+        - alert: KubePersistentVolumeErrors
+          expr: kube_persistentvolume_status_phase{job="kubernetes-service-endpoints",phase=~"Failed|Pending"} > 0
+          for: 2m
+          labels:
+            severity: critical   # if the pod is failing thn it's a critical situation
+          annotations:
+            description: The persistent volume {{ $labels.persistentvolume }} has status {{ $labels.phase }}.
+            summary: PersistentVolume is having issues with provisioning.
+        - alert: KubePodCrashLooping
+          expr: rate(kube_pod_container_status_restarts_total{job="kubernetes-service-endpoints",namespace=~".*"}[5m]) * 60 * 5 > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            description: Pod {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) is restarting {{ printf "%.2f" $value }} times / 5 minutes.
+            summary: Pod is crash looping.
+        - alert: KubePodNotReady
+          expr: sum by(namespace, pod) (max by(namespace, pod) (kube_pod_status_phase{job="kubernetes-service-endpoints",namespace=~".*",phase=~"Pending|Unknown"}) * on(namespace, pod)    group_left(owner_kind) topk by(namespace, pod) (1, max by(namespace, pod, owner_kind) (kube_pod_owner{owner_kind!="Job"}))) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            description: Pod {{ $labels.namespace }}/{{ $labels.pod }} has been in a non-ready state for longer than 5 minutes.
+            summary: Pod has been in a non-ready state for more than 2 minutes.
